@@ -15,6 +15,7 @@ from typing import Any
 from tokenops.control.attribution import _build_attribution, require_registration
 from tokenops.control.context import current_governance, current_span
 from tokenops.control.core import NodeType, Observation, Usage
+from tokenops.control.usage import usage_from_counts
 
 _KIND_MAP: dict[str, NodeType] = {
     "llm": "llm",
@@ -55,6 +56,7 @@ def observation_from_crossing(
     model: str = "",
     ts: float | None = None,
     extra_tags: Mapping[str, str] | None = None,
+    compaction: Mapping[str, int] | None = None,
 ) -> Observation:
     reg = require_registration()
     attr = _build_attribution(reg, service=service)
@@ -73,24 +75,9 @@ def observation_from_crossing(
 
     if node_type == "llm":
         usage_obj = getattr(result, "usage", None)
-        if usage_obj is not None:
-            usage = Usage(
-                input=int(
-                    getattr(usage_obj, "prompt_tokens", 0)
-                    or getattr(usage_obj, "input_tokens", 0)
-                    or 0
-                ),
-                output=int(
-                    getattr(usage_obj, "completion_tokens", 0)
-                    or getattr(usage_obj, "output_tokens", 0)
-                    or 0
-                ),
-            )
-        else:
-            usage = Usage(
-                input=int(getattr(result, "input_tokens", 0) or 0),
-                output=int(getattr(result, "output_tokens", 0) or 0),
-            )
+        usage = usage_from_counts(
+            usage_obj if usage_obj is not None else result, native=usage_obj is not None
+        )
         text = getattr(result, "content", None)
         if text is None and hasattr(result, "completion"):
             text = getattr(result, "completion", result)
@@ -116,7 +103,7 @@ def observation_from_crossing(
         raw_roll = getattr(result, "rolled_up_cost_micros", None)
         if raw_roll is None:
             raw_roll = input_state.get("rolled_up_cost_micros", 0)
-        rolled_up = int(raw_roll) if isinstance(raw_roll, (int, float, str)) else 0
+        rolled_up = int(raw_roll) if isinstance(raw_roll, int | float | str) else 0
         output = dict(result) if isinstance(result, dict) else {"result": str(result)}
 
     return Observation(
@@ -133,6 +120,7 @@ def observation_from_crossing(
         result_hash=result_hash,
         rolled_up_cost_micros=rolled_up,
         boundary_tags=tags,
+        compaction=compaction,
         **_span_fields(service),
     )
 

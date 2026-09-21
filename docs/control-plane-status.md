@@ -62,7 +62,7 @@ and `docs/run-attribution.md`.
 
 Seeded config is **run-scoped only** — registration `user_dims` are stored but do not yet scope policies ([#8](https://github.com/theagentplane/tokenops/issues/8)).
 
-## The 10 policies
+## Policies
 
 See the [policy glossary](product/policies-index.md) for canonical policy IDs and
 links to the per-policy reference pages.

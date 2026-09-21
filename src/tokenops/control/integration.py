@@ -24,8 +24,9 @@ from collections.abc import Callable, Sequence
 from chronicle import wrap_llm
 
 from tokenops.control.context import current_span
-from tokenops.control.core import Attribution, CallRequest, Observation, Usage
+from tokenops.control.core import Attribution, CallRequest, Observation
 from tokenops.control.crossing import install_crossing_hook
+from tokenops.control.usage import usage_from_counts
 
 
 def tool_signature(name: str, args) -> str:
@@ -62,10 +63,7 @@ def step_to_observation(
     span = _span_fields(service=service)
     if action == "model":
         tu = getattr(step, "tokens", None)
-        usage = Usage(
-            input=getattr(tu, "input_tokens", 0) if tu else 0,
-            output=getattr(tu, "output_tokens", 0) if tu else 0,
-        )
+        usage = usage_from_counts(tu)
         boundary_tags = {
             "node_type": "llm",
             "provider": provider,
@@ -137,7 +135,7 @@ def make_on_step(governor, attr: Attribution, *, provider: str, model: str, serv
 DispatchFn = Callable[..., object]
 
 
-def _estimate_input_tokens(messages) -> int:
+def _estimate_input_tokens(messages: object) -> int:
     return max(1, len(str(messages)) // 4)
 
 
@@ -182,11 +180,21 @@ def consume_carry(
     return out
 
 
-def _compact_messages(messages):
+def _compact_messages(
+    messages: list[object],
+    *,
+    estimate: Callable[[object], int] | None = None,
+) -> tuple[list[object], dict[str, int]]:
     """Deep context_compaction MUTATE: rewrite the outgoing messages — pin every system
-    message, drop duplicate non-system messages (deduped tool outputs / repeated context)."""
-    seen: set = set()
-    out: list = []
+    message, drop duplicate non-system messages (deduped tool outputs / repeated context).
+
+    Returns ``(compacted_messages, metadata)`` where *metadata* contains
+    ``tokens_before``, ``tokens_after`` and ``tokens_saved`` (all ints, ≥ 0).
+    If *estimate* is ``None`` token counts default to 0 (caller opts out of
+    measurement).
+    """
+    seen: set[tuple[str | None, str]] = set()
+    out: list[object] = []
     for msg in messages:
         role = msg.get("role") if isinstance(msg, dict) else None
         content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
@@ -201,7 +209,17 @@ def _compact_messages(messages):
             continue
         seen.add(key)
         out.append(msg)
-    return out
+    if estimate is not None:
+        before = estimate(messages)
+        after = estimate(out)
+        meta = {
+            "tokens_before": before,
+            "tokens_after": after,
+            "tokens_saved": max(0, before - after),
+        }
+    else:
+        meta = {"tokens_before": 0, "tokens_after": 0, "tokens_saved": 0}
+    return out, meta
 
 
 def wrap_complete(
@@ -231,6 +249,7 @@ def wrap_complete(
     seg = f"run:{attr.run_id}"
     boundary_id = f"{service or attr.agent}.chat"
     traced = wrap_llm(boundary_id, dispatch)
+    controls.compaction_supported = True  # wrap_complete IS the prompt-assembly hook
 
     def governed(p: str, m: str, messages) -> object:
         from tokenops.control.crossing import reset_wrap_owns_precall, wrap_owns_precall
@@ -250,7 +269,8 @@ def wrap_complete(
             use_model = controls.call.model_override or m
             messages = consume_carry(controls, messages)
             if controls.call.compact:  # deep prompt compaction
-                messages = _compact_messages(messages)
+                messages, _cmeta = _compact_messages(messages, estimate=estimate)
+                controls.call.compaction = _cmeta
 
             governor.ledger.admit(seg)
             try:
@@ -389,7 +409,8 @@ def wrap_stream(
             use_model = controls.call.model_override or m
             messages = consume_carry(controls, messages)
             if controls.call.compact:  # deep prompt compaction
-                messages = _compact_messages(messages)
+                messages, _cmeta = _compact_messages(messages, estimate=estimate)
+                controls.call.compaction = _cmeta
 
             governor.ledger.admit(seg)
             try:

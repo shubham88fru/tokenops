@@ -20,6 +20,7 @@ from tokenops.control.policies import (
     pre_call_worst_case,
     progress_guard,
     step_cap,
+    time_budget,
     tool_fix,
     tool_output_cap,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "pre_call_worst_case",
     "progress_guard",
     "step_cap",
+    "time_budget",
     "tool_fix",
     "tool_output_cap",
 ]

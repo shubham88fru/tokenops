@@ -7,15 +7,16 @@ lives under [`docs/policies/`](../policies/).
 
 ## Canonical policy IDs
 
-The [default seed](../../src/tokenops/config/default.yaml) contains the ten
-available policies below. Inclusion in the seed does not make a policy mandatory
-in custom configurations or change its documented enforcement limitations.
+The [default seed](../../src/tokenops/config/default.yaml) contains ten of the eleven
+available policies below; `time_budget` is opt-in. Inclusion in the seed does not make
+a policy mandatory in custom configurations or change its documented enforcement limitations.
 
 | Policy ID | Display label | Availability | Doc |
 |-----------|---------------|--------------|-----|
 | `cost_budget` | Cost budget | In default seed | [cost_budget.md](../policies/cost_budget.md) |
 | `pre_call_worst_case` | Pre-call worst case | In default seed | [pre_call_worst_case.md](../policies/pre_call_worst_case.md) |
 | `step_cap` | Step cap | In default seed | [step_cap.md](../policies/step_cap.md) |
+| `time_budget` | Time budget | Opt-in | [time_budget.md](../policies/time_budget.md) |
 | `concurrency_cap` | Concurrency cap | In default seed | [concurrency_cap.md](../policies/concurrency_cap.md) |
 | `tool_fix` | Tool fix | In default seed | [tool_fix.md](../policies/tool_fix.md) |
 | `tool_output_cap` | Tool output cap | In default seed | [tool_output_cap.md](../policies/tool_output_cap.md) |

@@ -37,6 +37,7 @@ from tokenops.control.policies import (
     pre_call_worst_case,
     progress_guard,
     step_cap,
+    time_budget,
     tool_fix,
     tool_output_cap,
 )
@@ -205,6 +206,26 @@ def test_it_step_cap_halts_at_max_steps():
     )  # second call dispatches then observe HALTs; or halt on observe of step 2
 
 
+def test_time_budget_halts_run():
+    controls = ApplyControls()
+    gov = Governor(Ledger(budgets=[], price=toy_price), controls)
+    gov.register(*time_budget.build(max_seconds=0.0))
+    attr = _attr("r-tb")
+    gov.ledger.open_run("r-tb")
+    dispatch, calls = _dispatch()
+    governed = _governed(gov, attr, dispatch, run_id="r-tb")
+
+    def run():
+        # The ledger records the step before observe fires, so elapsed=0.0 >= 0.0
+        # trips on the first call.
+        with pytest.raises(Halt):
+            governed("openai", "gpt-4o-mini", [{"role": "user", "content": "1"}])
+
+    _with_scope(gov, attr, "r-tb", run)
+    assert gov.ledger.is_halted("r-tb")
+    assert len(calls) == 1
+
+
 def test_it_concurrency_cap_rejects_when_inflight_saturated():
     controls = ApplyControls()
     gov = Governor(Ledger(price=toy_price), controls)
@@ -333,7 +354,7 @@ def test_it_progress_guard_injects_then_halts():
 def test_it_context_compaction_rewrites_messages_via_wrap():
     controls = ApplyControls()
     gov = Governor(Ledger(price=toy_price), controls)
-    gov.register(*context_compaction.build(ctx_max=10, has_hook=True))
+    gov.register(*context_compaction.build(ctx_max=10))
     attr = _attr("r-ccx")
     gov.ledger.open_run("r-ccx")
     dispatch, calls = _dispatch()
@@ -352,6 +373,49 @@ def test_it_context_compaction_rewrites_messages_via_wrap():
     sent = calls[0]["messages"]
     assert sum(1 for m in sent if m.get("content") == "dup") == 1
     assert any(m.get("content") == "unique" for m in sent)
+
+
+def test_it_context_compaction_records_tokens_in_ledger_event():
+    """Compaction metadata (tokens_before / tokens_after / tokens_saved) flows through
+    wrap_complete → crossing hook → Observation → step event in the ledger."""
+    from fakes import FakeLedgerBackend
+
+    backend = FakeLedgerBackend()
+    controls = ApplyControls()
+    gov = Governor(Ledger(price=toy_price, backend=backend), controls)
+    gov.register(*context_compaction.build(ctx_max=10))  # tiny ctx → always trips
+    attr = _attr("r-cc-meta")
+    gov.ledger.open_run("r-cc-meta")
+    dispatch, calls = _dispatch(inp=80, out=20)
+    governed = _governed(gov, attr, dispatch, run_id="r-cc-meta")
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "dup"},
+        {"role": "user", "content": "dup"},
+        {"role": "user", "content": "unique"},
+    ]
+
+    def run():
+        governed("openai", "gpt-4o-mini", msgs)
+
+    _with_scope(gov, attr, "r-cc-meta", run)
+
+    # Verify the step event in the backend carries compaction metadata
+    state = backend._run_state.get("r-cc-meta")
+    assert state is not None
+    recent = state["recent"]
+    assert len(recent) >= 1
+    llm_step = recent[-1]
+    assert llm_step.get("node_type") == "llm"
+    comp = llm_step.get("compaction")
+    assert comp is not None, "compaction metadata missing from step event"
+    assert any(
+        action.policy_id == "context_compaction" and action.compact for action in controls.event_log
+    )
+    assert comp["tokens_before"] > 0
+    assert comp["tokens_after"] > 0
+    assert comp["tokens_saved"] >= 0
+    assert comp["tokens_saved"] == comp["tokens_before"] - comp["tokens_after"]
 
 
 def test_it_output_runaway_retries_then_succeeds():

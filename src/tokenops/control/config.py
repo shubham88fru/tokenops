@@ -20,7 +20,7 @@ Config shape (dict, typically parsed from YAML)::
         tool_output_cap:    { cap_tokens: 8000 }
         progress_guard:     { window: 6, repeats: 3, max_corrections: 2 }
         cost_guard:         { budget: run_llm_cap, threshold: 0.8, mode: minimize }
-        context_compaction: { ctx_max: 100000, has_hook: false }
+        context_compaction: { ctx_max: 100000 }
         output_runaway:     { repeats: 4, max_retries: 2 }
 
 Fail closed: an unknown policy key, a missing budget reference, or a missing required
@@ -48,6 +48,7 @@ from tokenops.control.policies import (
     pre_call_worst_case,
     progress_guard,
     step_cap,
+    time_budget,
     tool_fix,
     tool_output_cap,
 )
@@ -113,6 +114,11 @@ POLICY_TEMPLATES: Mapping[str, PolicyTemplate] = MappingProxyType(
             factory=lambda p, c: step_cap.build(p["max_steps"]),
             default_params={"max_steps": 20},
         ),
+        "time_budget": PolicyTemplate(
+            display_name="Time budget",
+            factory=lambda p, c: time_budget.build(p["max_seconds"]),
+            default_params={"max_seconds": 60.0},
+        ),
         "concurrency_cap": PolicyTemplate(
             display_name="Concurrency cap",
             factory=lambda p, c: concurrency_cap.build(
@@ -161,10 +167,8 @@ POLICY_TEMPLATES: Mapping[str, PolicyTemplate] = MappingProxyType(
         ),
         "context_compaction": PolicyTemplate(
             display_name="Context compaction",
-            factory=lambda p, c: context_compaction.build(
-                p["ctx_max"], window=p.get("window", 4), has_hook=p.get("has_hook", True)
-            ),
-            default_params={"ctx_max": 100000, "has_hook": False},
+            factory=lambda p, c: context_compaction.build(p["ctx_max"], window=p.get("window", 4)),
+            default_params={"ctx_max": 100000},
         ),
         "output_runaway": PolicyTemplate(
             display_name="Output runaway",

@@ -23,6 +23,11 @@ from tokenops.control import (
     governance_events_payload,
     halt_detector_from_events,
 )
+from tokenops.control.context import (
+    current_controls,
+    reset_current_controls,
+    set_current_controls,
+)
 from tokenops.control.core import Detector, Policy, Severity, Signal
 from tokenops.control.models import GovernanceMode
 
@@ -34,6 +39,7 @@ from tokenops.control.models import GovernanceMode
         ("cost_budget", {"budget": "cap"}, "llm", ActionKind.HALT),
         ("pre_call_worst_case", {"budget": "cap"}, "pre_call", ActionKind.HALT),
         ("step_cap", {"max_steps": 1}, "tool", ActionKind.HALT),
+        ("time_budget", {"max_seconds": 1.0}, "tool", ActionKind.HALT),
         ("concurrency_cap", {"max_concurrent": 1}, "pre_call", ActionKind.REJECT),
         ("tool_fix", {"registry": ["search"]}, "tool", ActionKind.INJECT),
         ("tool_output_cap", {"cap_tokens": 1}, "tool", ActionKind.INJECT),
@@ -56,6 +62,12 @@ def test_governor_events_use_policy_id(policy_id, params, moment, kind, mode):
     governor.ledger.open_run(attr.run_id)
     if policy_id == "concurrency_cap":
         governor.ledger.admit(f"run:{attr.run_id}")
+    if policy_id == "context_compaction":
+        controls.compaction_supported = True
+    if policy_id == "time_budget":
+        governor.observe(Observation(attr=attr, node_type="tool", boundary_id="search", ts=0.0))
+        assert governance_events_payload(controls) == []
+    previous_controls = current_controls()
 
     def trigger():
         if moment == "pre_call":
@@ -91,11 +103,40 @@ def test_governor_events_use_policy_id(policy_id, params, moment, kind, mode):
     else:
         trigger()
 
+    assert current_controls() is previous_controls
     events = governance_events_payload(controls)
     assert len(events) == 1
     assert events[0]["policy"] == policy_id
     assert events[0]["kind"] == kind.value
     assert halt_detector_from_events(events) == (policy_id if kind is ActionKind.HALT else None)
+
+
+@pytest.mark.parametrize("compaction_supported", [False, True])
+def test_compaction_identity_and_capability_restore_outer_controls(compaction_supported):
+    governor, controls = build_governance_stack(
+        {"policies": {"context_compaction": {"ctx_max": 10}}},
+        toy_price,
+        mode=GovernanceMode.PREVIEW,
+    )
+    controls.compaction_supported = compaction_supported
+    outer = PreviewControls(compaction_supported=not compaction_supported)
+    token = set_current_controls(outer)
+    try:
+        governor.pre_call(
+            CallRequest(
+                attr=make_attr(),
+                provider="openai",
+                model="gpt-4o-mini",
+                estimated_input_tokens=10,
+            )
+        )
+        assert current_controls() is outer
+        [action] = controls.actions
+        assert action.policy_id == "context_compaction"
+        expected = ActionKind.MUTATE if compaction_supported else ActionKind.ALLOW
+        assert action.kind is expected
+    finally:
+        reset_current_controls(token)
 
 
 def test_unknown_price_halt_has_exact_policy_id():

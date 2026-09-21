@@ -1,8 +1,8 @@
-"""context_compaction — default; needs a prompt-assembly hook.
+"""context_compaction — default; derive compaction capability from controls.
 
 LLD row:
     Detect: est_input ≥ ctx_max OR est_input rising over recent(run, W) (estimate from last
-            llm step's usage.input, never tokenize on the hot path).
+            llm step's usage.input + usage.cached, never tokenize on the hot path).
     Fix:    MUTATE the outgoing prompt: (1) move volatile values below the static prefix to
             restore the prompt-cache discount, (2) dedup tool outputs by hash, (3) summarize
             only filler, pinning system prompt, schema, constraints, state. No hook → degrade
@@ -10,9 +10,15 @@ LLD row:
 
 Fires at pre_call (it shapes the *next* prompt). Without an assembly hook it can only
 observe — so it emits the signal for the dashboard and takes no action. It never HALTs.
+
+Capability is derived at runtime from ``controls.compaction_supported`` (set by
+``wrap_complete`` which supplies the prompt-assembly hook), not from a governance config
+flag.  See ``docs/policies/context_compaction.md``.
 """
 
 from __future__ import annotations
+
+import logging
 
 from tokenops.control.core import (
     Action,
@@ -24,6 +30,8 @@ from tokenops.control.core import (
     Severity,
     Signal,
 )
+
+_log = logging.getLogger(__name__)
 
 
 class ContextCompactionDetector(Detector):
@@ -46,10 +54,15 @@ class ContextCompactionDetector(Detector):
         rising = False
         if len(recent_llm) >= 2:
             rising = all(
-                (a.usage.input if a.usage else 0) <= (b.usage.input if b.usage else 0)
+                (a.usage.input + a.usage.cached if a.usage else 0)
+                <= (b.usage.input + b.usage.cached if b.usage else 0)
                 for a, b in zip(recent_llm, recent_llm[1:])
-            ) and (recent_llm[-1].usage.input if recent_llm[-1].usage else 0) > (
-                recent_llm[0].usage.input if recent_llm[0].usage else 0
+            ) and (
+                recent_llm[-1].usage.input + recent_llm[-1].usage.cached
+                if recent_llm[-1].usage
+                else 0
+            ) > (
+                recent_llm[0].usage.input + recent_llm[0].usage.cached if recent_llm[0].usage else 0
             )
         if est >= self.ctx_max or (rising and est >= self.ctx_max // 2):
             return Signal(
@@ -65,15 +78,31 @@ class ContextCompactionDetector(Detector):
 
 class ContextCompactionPolicy(Policy):
     """MUTATE the prompt if an assembly hook exists; otherwise telemetry-only (ALLOW). Never
-    HALT — losing the cache discount or a bloated prompt is not a reason to kill a run."""
+    HALT — losing the cache discount or a bloated prompt is not a reason to kill a run.
+
+    Compaction capability is read from ``controls.compaction_supported`` (advertised by
+    ``wrap_complete``), not from a config flag.
+    """
 
     name = "context_compaction"
 
-    def __init__(self, has_hook: bool = True) -> None:
-        self.has_hook = has_hook
+    _telemetry_only_logged: bool = False
 
     def decide(self, signal: Signal, view: LedgerView) -> Action:
-        if not self.has_hook:
+        from tokenops.control.context import current_controls
+
+        controls = current_controls()
+        compaction_supported = (
+            getattr(controls, "compaction_supported", False) if controls else False
+        )
+        if not compaction_supported:
+            if not ContextCompactionPolicy._telemetry_only_logged:
+                _log.warning(
+                    "context_compaction: no compaction hook available — "
+                    "policy will emit telemetry only (ALLOW). "
+                    "Use wrap_complete for full compaction support."
+                )
+                ContextCompactionPolicy._telemetry_only_logged = True
             return Action(
                 kind=ActionKind.ALLOW,
                 run_id=signal.run_id,
@@ -89,5 +118,5 @@ class ContextCompactionPolicy(Policy):
         )
 
 
-def build(ctx_max: int, *, window: int = 4, has_hook: bool = True) -> tuple[Detector, Policy]:
-    return ContextCompactionDetector(ctx_max, window=window), ContextCompactionPolicy(has_hook)
+def build(ctx_max: int, *, window: int = 4) -> tuple[Detector, Policy]:
+    return ContextCompactionDetector(ctx_max, window=window), ContextCompactionPolicy()

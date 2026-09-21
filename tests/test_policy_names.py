@@ -75,6 +75,7 @@ def test_core_and_example_yaml_use_only_canonical_policy_keys(path):
         governance = document["governance"]
         configured_ids = set(governance.get("policies") or {})
         assert configured_ids <= set(policy_template_ids())
+        assert "has_hook" not in governance.get("policies", {}).get("context_compaction", {})
         governor = build_governor(governance, toy_price)
         assert set(governor._policy_by_name) == configured_ids
 
@@ -97,7 +98,7 @@ def test_default_seed_preserves_policy_keys_parameters_and_instance_ids(tmp_path
     monkeypatch.delenv("TOKENOPS_SKIP_GOVERNANCE_SEED", raising=False)
     governance = load_governance_yaml(DEFAULT_CONFIG)
     configured_ids = set(governance["policies"])
-    assert configured_ids == set(policy_template_ids())
+    assert configured_ids == set(policy_template_ids()) - {"time_budget"}
     store = Store(str(tmp_path / "seed.db"), auto_seed=False)
     try:
         assert store.seed_default_governance_if_empty(governance)
@@ -144,7 +145,6 @@ def test_configurable_instance_id_does_not_rename_template(tmp_path, instance_id
         "Tool fix",
         "ToolFixDetector",
         "seed_tool_fix",
-        "time_budget",
     ],
 )
 def test_unsupported_spellings_are_not_config_or_store_aliases(tmp_path, unsupported):
@@ -217,6 +217,7 @@ def test_glossary_labels_and_links_match_the_registry():
     )
     assert len(rows) == len(POLICY_TEMPLATES)
     assert {row[0] for row in rows} == set(POLICY_TEMPLATES)
+    seeded_ids = set(load_governance_yaml(DEFAULT_CONFIG)["policies"])
     for policy_id, display_name, availability, link_text, target in rows:
         template = POLICY_TEMPLATES[policy_id]
         assert display_name == template.display_name
@@ -224,9 +225,31 @@ def test_glossary_labels_and_links_match_the_registry():
         doc = (index.parent / target).resolve()
         assert doc == ROOT / f"docs/policies/{policy_id}.md"
         assert doc.read_text().splitlines()[0].startswith(f"# {template.display_name}")
-        assert availability == (
-            "In default seed" if template.factory is not None else "Temporarily disabled"
+        if template.factory is None:
+            assert availability == "Temporarily disabled"
+        else:
+            assert availability == ("In default seed" if policy_id in seeded_ids else "Opt-in")
+
+
+def test_context_compaction_admin_defaults_do_not_reintroduce_removed_capability_flag():
+    assert POLICY_TEMPLATES["context_compaction"].default_params == {"ctx_max": 100000}
+
+
+def test_time_budget_is_available_without_being_seeded(tmp_path):
+    assert "time_budget" in policy_template_ids()
+    assert "time_budget" not in load_governance_yaml(DEFAULT_CONFIG)["policies"]
+    store = Store(str(tmp_path / "time-budget.db"), auto_seed=False)
+    try:
+        instance = PolicyInstance(
+            id="customer-latency-limit", template="time_budget", params={"max_seconds": 2.0}
         )
+        store.upsert_policy_instance(instance)
+        governor = build_governor(store.governance_config_for("research"), toy_price)
+        assert store.get_policy_instance(instance.id) == instance
+        assert set(governor._policy_by_name) == {"time_budget"}
+        assert governor._detectors[0].max_seconds == 2.0
+    finally:
+        store.close()
 
 
 def test_demo_capture_points_at_canonical_policy_registration():
@@ -242,6 +265,8 @@ def test_demo_capture_points_at_canonical_policy_registration():
     snippets = ast.literal_eval(assignment.value)
     snippet = next(item for item in snippets if item["name"] == "04_governor_setup")
     source = (ROOT / snippet["file"]).read_text().splitlines()
+    assert source[snippet["start"] - 1].strip() == 'gov_cfg = config.get("governance", config)'
+    assert source[snippet["end"] - 1].strip() == "return governor"
     captured = "\n".join(source[snippet["start"] - 1 : snippet["end"]])
     assert "template = POLICY_TEMPLATES.get(name)" in captured
     assert "detector, policy = template.factory(params or {}, ctx)" in captured

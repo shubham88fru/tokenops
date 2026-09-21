@@ -278,6 +278,7 @@ with st.expander("Which policies use a budget?"):
 | `pre_call_worst_case` | **Yes** — blocks call if worst-case would exceed limit | Before each LLM (`pre_call`) |
 | `cost_guard` | **Yes** — nudge at 80% of limit | After each crossing |
 | `step_cap` | No — uses `max_steps` param | After each crossing |
+| `time_budget` | No — uses `max_seconds` param | After each crossing |
 | `concurrency_cap` | No | Before each LLM |
 | `tool_fix` | No | After tool crossings |
 | `tool_output_cap` | No | After tool crossings |

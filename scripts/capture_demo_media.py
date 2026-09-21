@@ -89,9 +89,9 @@ CODE_SNIPPETS = [
         "name": "04_governor_setup",
         "title": "Governor setup — budgets, ledger, policy registration",
         "file": "src/tokenops/control/config.py",
-        "start": 236,
-        "end": 257,
-        "highlight": {236, 239, 240, 244, 249, 255},
+        "start": 240,
+        "end": 261,
+        "highlight": {240, 243, 244, 248, 253, 259},
     },
 ]
 
