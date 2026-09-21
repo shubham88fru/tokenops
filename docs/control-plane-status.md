@@ -64,9 +64,8 @@ Seeded config is **run-scoped only** — registration `user_dims` are stored but
 
 ## The 10 policies
 
-`cost_budget` · `pre_call_worst_case` · `step_cap` · `concurrency_cap` · `tool_freq` ·
-`tool_output_cap` · `progress_guard` · `cost_guard` · `context_compaction` · `output_runaway`.
-Per-policy docs: `docs/policies/`.
+See the [policy glossary](product/policies-index.md) for canonical policy IDs and
+links to the per-policy reference pages.
 
 ## Run it
 
